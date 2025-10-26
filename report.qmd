@@ -1,34 +1,182 @@
 ---
 title: "EV Power - Lab 4 Project Report"
-format: typst
+format: pdf
 ---
 
-# Example Solution 1
+## OVERVIEW
+
+In this report, I investigate the main research question: "Electric vehicles reduce direct emissions, but does the electricity used to charge them actually come from clean sources?
+
+My question for analysis is **Do states with higher renewable usage have lower average electricity prices?**
+
+## Data and Methods
 
 ## **Part 0: libraries**
 
 ```{r}
-
+library(tidyverse)
+library(sf)
+library(usmap)
+library(patchwork)
 ```
 
 ## **Part 1:** **Defining Research Question**
 
-Chosen Question:
+Chosen Question: Do states with higher renewable usage have lower average electricity prices?
 
 ## **Part 2: Data Preparation and Cleaning**
 
 ```{r}
+renew_2021_raw <- read_csv("data/renew-use-2021.csv")
+renew_2022_raw <- read_csv("data/renew-use-2022.csv")
+renew_2023_raw <- read_csv("data/renew-use-2023.csv")
+avg_price_raw <- read_csv("data/av-energy-price-2021-2023.csv")
 
+clean_col_names <- function(col_name) {
+  col_name |>
+    str_to_lower() |>
+    str_replace_all(" ", "_") |>
+    str_replace_all("[^a-z0-9_]", "")
+}
+
+
+renew_2021 <- renew_2021_raw |>
+  rename_with(clean_col_names) |>
+  rename(renewable_use = renewable_use_2021) |> 
+  mutate(year = 2021)                            
+
+renew_2022 <- renew_2022_raw |>
+  rename_with(clean_col_names) |>
+  rename(renewable_use = renewable_use_2022) |> 
+  mutate(year = 2022)                          
+
+
+renew_2023 <- renew_2023_raw |>
+  rename_with(clean_col_names) |>
+  rename(renewable_use = renewable_use_2023) |> 
+  mutate(year = 2023)                            
+
+renew_use_all_years <- bind_rows(
+  renew_2021,
+  renew_2022,
+  renew_2023
+)
+
+
+
+
+avg_price <- avg_price_raw |> 
+  rename_with(clean_col_names)
+
+cat("\nRenewable Data (Combined):\n")
+glimpse(renew_use_all_years)
+
+cat("\nAverage Price Data:\n")
+glimpse(avg_price)
 ```
 
 ## **Part 3: Joining / Pivoting Datasets for Analysis**
 
 ```{r}
+renew_summary <- renew_use_all_years |>
+  mutate(
+    renewable_use_num = str_extract(renewable_use, "\\d+") |> as.numeric()
+  ) |>
+  group_by(state, year) |>
+  summarize(
+    total_renewable_use = sum(renewable_use_num, na.rm = TRUE)
+  ) |>
+  ungroup()
 
+cat("Cleaned Renewable Data (Summary):\n")
+glimpse(renew_summary)
+
+
+
+price_clean <- avg_price |>
+  slice(-c(1, 2)) |> # the first two rows are kinda bad so I removed them 
+  separate(
+    col = total_energy_average_price_dollars_per_million_btu,
+    into = c("state", "price_2021", "price_2022", "price_2023"),
+    sep = ","
+  ) |>
+  pivot_longer(
+    cols = starts_with("price_"),
+    names_to = "year_str",       
+    values_to = "avg_price_str"  
+  ) |>
+  mutate(
+    year = str_extract(year_str, "\\d{4}") |> as.numeric(),
+    avg_price = str_extract(avg_price_str, "[0-9\\.]+") |> as.numeric()
+  ) |>
+  select(state, year, avg_price)
+
+cat("\nCleaned Price Data (Tidy):\n")
+glimpse(price_clean)
+
+energy_data_joined <- left_join(
+  renew_summary,
+  price_clean,
+  by = c("state", "year")
+) |> 
+  rename(total_reusable_use_MMBTU = total_renewable_use) |>
+  mutate(state = str_to_upper(state))
+
+cat("\nJoined Data for everything:\n")
+glimpse(energy_data_joined)
+
+
+energy_summary_avg <- energy_data_joined |>
+  filter(!is.na(total_reusable_use_MMBTU), !is.na(avg_price)) |>
+  group_by(state) |>
+  summarize(
+    avg_renewable_use = mean(total_reusable_use_MMBTU, na.rm = TRUE),
+    avg_energy_price = mean(avg_price, na.rm = TRUE)
+  ) |>
+  ungroup()
 ```
 
 ## **Part 4: Mapping Visualization**
 
 ```{r}
+#| label: create-usmap
+#| message: false
+#| warning: false
+#| echo: false
+# renewable energy map 
+map_use <- plot_usmap(data = energy_summary_avg, values = "avg_renewable_use") +
+  scale_fill_viridis_c(
+    option = "plasma", 
+    labels = scales::label_number(scale_cut = scales::cut_si(""))
+  ) +
+  labs(
+    title = "Average Renewable Use (2021-2023)",
+    fill = "Avg. Use (MMBTU)"
+  ) +
+  theme(plot.title = element_text(hjust = 0.5), 
+  legend.position = "bottom") 
+
+# price map 
+map_price <- plot_usmap(data = energy_summary_avg, values = "avg_energy_price") +
+  scale_fill_viridis_c(
+    option = "viridis", 
+    labels = scales::label_dollar()
+  ) +
+  labs(
+    title = "Average Energy Price (2021-2023)",
+    fill = "Avg. Price"
+  ) +
+  theme(plot.title = element_text(hjust = 0.5), 
+  legend.position = "bottom")
+
+map_use + map_price
 
 ```
+
+
+## **Part 5: Analysis **
+I noticed that California has very high average renewable energy use, but also a high energy price. Texas on the other hand also has a very high average renewable energy use, but has a much lower average energy price. This is likely due to the fact that the cost of living in Texas is generally lower. 
+
+As for the the other states states, there appear to be almost no correlation between a states' energy price and renewable energy usage.
+
+Lastly, the maps show that for the vast majority of the United States (the large dark purple areas), the total renewable energy use is low. This suggests that in most states, the electricity grid is not predominantly clean. So, EVs in those regions are likely being charged by electricity from non-renewable sources.
